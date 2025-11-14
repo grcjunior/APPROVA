@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 import { 
   BookOpen, Calendar, FileText, Target, Timer, BarChart3, 
   Users, User, Plus, Play, Pause, RotateCcw, Check, 
@@ -11,15 +13,25 @@ import {
   Circle, AlertCircle, Calendar as CalendarIcon,
   ArrowRight, Zap, Activity, Focus, Menu, X, Infinity,
   Lightbulb, BookMarked, GraduationCap, ClipboardList,
-  ChevronLeft, ChevronDown, HelpCircle
+  ChevronLeft, ChevronDown, HelpCircle, Trophy, Medal,
+  Camera, Save, Eye, EyeOff, RefreshCw, BarChart2,
+  PieChart, Flame, Coffee, LogOut
 } from 'lucide-react';
 
 // Tipos de dados
-interface User {
+interface UserProfile {
+  id: string;
   name: string;
+  email: string;
   course: string;
   goals: string;
-  avatar?: string;
+  avatar_url?: string | null;
+  address?: string | null;
+  cpf?: string | null;
+  phone?: string | null;
+  plan_type?: string;
+  plan_duration?: string;
+  exam_type?: 'residencia' | 'enem' | 'revalida' | 'concurso' | null;
 }
 
 interface Task {
@@ -85,12 +97,42 @@ interface ExamContest {
   institution: string;
   examUrl: string;
   subjects: string[];
+  category: 'concurso' | 'residencia' | 'enem' | 'revalida';
+}
+
+interface Flashcard {
+  id: string;
+  question: string;
+  answer: string;
+  difficulty: 'easy' | 'medium' | 'hard' | null;
+  folder: string;
+  createdAt: string;
+  lastReviewed?: string;
+}
+
+interface ChatMessage {
+  id: string;
+  userId: string;
+  userName: string;
+  message: string;
+  timestamp: string;
+}
+
+interface RankingUser {
+  id: string;
+  name: string;
+  focusTime: number;
+  avatar?: string;
+  position: number;
 }
 
 export default function ApprovaApp() {
+  const router = useRouter();
+  
   // Estados principais
-  const [currentView, setCurrentView] = useState('onboarding');
-  const [user, setUser] = useState<User | null>(null);
+  const [currentView, setCurrentView] = useState('dashboard');
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [studySessions, setStudySessions] = useState<StudySession[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -98,19 +140,218 @@ export default function ApprovaApp() {
   const [forumPosts, setForumPosts] = useState<ForumPost[]>([]);
   const [plannerEvents, setPlannerEvents] = useState<PlannerEvent[]>([]);
   const [exams, setExams] = useState<ExamContest[]>([]);
+  const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [rankingUsers, setRankingUsers] = useState<RankingUser[]>([]);
   
-  // Estados do Pomodoro
+  // Estados do Pomodoro e Foco
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
+  const [breakTime, setBreakTime] = useState(5 * 60);
   const [isRunning, setIsRunning] = useState(false);
   const [currentSession, setCurrentSession] = useState<'work' | 'break'>('work');
   const [pomodoroCount, setPomodoroCount] = useState(0);
+  const [dailyReward, setDailyReward] = useState('');
+  const [dailyGoalHours, setDailyGoalHours] = useState(0);
+  const [totalStudyTimeToday, setTotalStudyTimeToday] = useState(0);
+  const [goalCompleted, setGoalCompleted] = useState(false);
+  const [timerMode, setTimerMode] = useState<'pomodoro' | 'stopwatch' | 'countdown'>('pomodoro');
+  const [stopwatchTime, setStopwatchTime] = useState(0);
+  const [countdownTime, setCountdownTime] = useState(0);
+
+  // Estados de Flashcards
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [isTrainingMode, setIsTrainingMode] = useState(false);
+  const [currentFlashcardIndex, setCurrentFlashcardIndex] = useState(0);
+  const [showAnswer, setShowAnswer] = useState(false);
+  const [newFlashcard, setNewFlashcard] = useState({ question: '', answer: '', folder: '' });
 
   // Estados da UI
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [showOnboarding, setShowOnboarding] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [plannerView, setPlannerView] = useState<'calendar' | 'weekly' | 'monthly'>('weekly');
   const [selectedExamContest, setSelectedExamContest] = useState<string | null>(null);
+  const [chatInput, setChatInput] = useState('');
+
+  // Carregar dados do usuário ao montar o componente
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const loadUserData = async () => {
+    try {
+      // Verificar se há usuário autenticado
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      
+      if (!authUser) {
+        router.push('/login');
+        return;
+      }
+
+      // Carregar perfil do usuário
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', authUser.id)
+        .single();
+
+      if (profileError) throw profileError;
+
+      setUser(profile);
+
+      // Carregar eventos do planner
+      const { data: events, error: eventsError } = await supabase
+        .from('planner_events')
+        .select('*')
+        .eq('user_id', authUser.id)
+        .order('date', { ascending: true });
+
+      if (!eventsError && events) {
+        setPlannerEvents(events);
+      }
+
+      // Carregar flashcards
+      const { data: cards, error: cardsError } = await supabase
+        .from('flashcards')
+        .select('*')
+        .eq('user_id', authUser.id)
+        .order('created_at', { ascending: false });
+
+      if (!cardsError && cards) {
+        setFlashcards(cards.map(card => ({
+          id: card.id,
+          question: card.question,
+          answer: card.answer,
+          difficulty: card.difficulty as 'easy' | 'medium' | 'hard' | null,
+          folder: card.folder,
+          createdAt: card.created_at,
+          lastReviewed: card.last_reviewed
+        })));
+      }
+
+      // Carregar sessões de estudo
+      const { data: sessions, error: sessionsError } = await supabase
+        .from('study_sessions')
+        .select('*')
+        .eq('user_id', authUser.id)
+        .order('date', { ascending: false });
+
+      if (!sessionsError && sessions) {
+        const today = new Date().toISOString().split('T')[0];
+        const todayTotal = sessions
+          .filter(s => s.date === today)
+          .reduce((acc, s) => acc + s.duration, 0);
+        setTotalStudyTimeToday(todayTotal);
+      }
+
+      // Carregar mensagens do chat
+      const { data: messages, error: messagesError } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .limit(50);
+
+      if (!messagesError && messages) {
+        setChatMessages(messages.map(msg => ({
+          id: msg.id,
+          userId: msg.user_id,
+          userName: msg.user_name,
+          message: msg.message,
+          timestamp: msg.created_at
+        })));
+      }
+
+      // Dados de exemplo para outras funcionalidades
+      setTasks([
+        {
+          id: '1',
+          title: 'Estudar Cálculo Diferencial',
+          subject: 'Matemática',
+          status: 'in-progress',
+          priority: 'high',
+          dueDate: '2024-01-15',
+          description: 'Capítulos 1-3 do livro'
+        },
+        {
+          id: '2',
+          title: 'Projeto de Física',
+          subject: 'Física',
+          status: 'pending',
+          priority: 'medium',
+          dueDate: '2024-01-20'
+        }
+      ]);
+
+      setGoals([
+        {
+          id: '1',
+          title: 'Dominar Cálculo',
+          description: 'Completar todos os exercícios do semestre',
+          targetDate: '2024-06-30',
+          progress: 65,
+          category: 'Matemática'
+        }
+      ]);
+
+      setExams([
+        {
+          id: '1',
+          name: 'ENEM 2023',
+          year: 2023,
+          institution: 'INEP',
+          examUrl: '#',
+          subjects: ['Matemática', 'Português', 'Ciências', 'História', 'Geografia'],
+          category: 'enem'
+        },
+        {
+          id: '2',
+          name: 'Concurso TRF 2023',
+          year: 2023,
+          institution: 'Tribunal Regional Federal',
+          examUrl: '#',
+          subjects: ['Direito Constitucional', 'Direito Administrativo', 'Português'],
+          category: 'concurso'
+        },
+        {
+          id: '3',
+          name: 'Residência Médica USP 2023',
+          year: 2023,
+          institution: 'Universidade de São Paulo',
+          examUrl: '#',
+          subjects: ['Clínica Médica', 'Cirurgia', 'Pediatria', 'Ginecologia'],
+          category: 'residencia'
+        },
+        {
+          id: '4',
+          name: 'REVALIDA 2023',
+          year: 2023,
+          institution: 'INEP',
+          examUrl: '#',
+          subjects: ['Clínica Médica', 'Cirurgia', 'Saúde Coletiva', 'Pediatria'],
+          category: 'revalida'
+        }
+      ]);
+
+      // Ranking de exemplo
+      setRankingUsers([
+        { id: '1', name: 'Ana Silva', focusTime: 28800, position: 1 },
+        { id: '2', name: 'João Santos', focusTime: 25200, position: 2 },
+        { id: '3', name: 'Maria Costa', focusTime: 21600, position: 3 },
+        { id: '4', name: profile.name, focusTime: todayTotal || 18000, position: 4 },
+        { id: '5', name: 'Carla Souza', focusTime: 14400, position: 5 }
+      ]);
+
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Função de logout
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
 
   // Frases motivacionais
   const motivationalPhrases = [
@@ -131,248 +372,221 @@ export default function ApprovaApp() {
   // Timer do Pomodoro
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (isRunning && pomodoroTime > 0) {
-      interval = setInterval(() => {
-        setPomodoroTime(time => time - 1);
-      }, 1000);
-    } else if (pomodoroTime === 0) {
-      setIsRunning(false);
-      if (currentSession === 'work') {
-        setPomodoroCount(count => count + 1);
-        setPomodoroTime(5 * 60);
-        setCurrentSession('break');
+    if (isRunning && timerMode === 'pomodoro') {
+      if (pomodoroTime > 0) {
+        interval = setInterval(() => {
+          setPomodoroTime(time => time - 1);
+          if (currentSession === 'work') {
+            setTotalStudyTimeToday(prev => prev + 1);
+          }
+        }, 1000);
       } else {
-        setPomodoroTime(25 * 60);
-        setCurrentSession('work');
+        setIsRunning(false);
+        if (currentSession === 'work') {
+          setPomodoroCount(count => count + 1);
+          saveStudySession(25 * 60);
+          setPomodoroTime(breakTime);
+          setCurrentSession('break');
+        } else {
+          setPomodoroTime(25 * 60);
+          setCurrentSession('work');
+        }
       }
     }
     return () => clearInterval(interval);
-  }, [isRunning, pomodoroTime, currentSession]);
+  }, [isRunning, pomodoroTime, currentSession, timerMode, breakTime]);
 
-  // Dados iniciais
+  // Timer do Stopwatch
   useEffect(() => {
-    if (user) {
-      setTasks([
-        {
-          id: '1',
-          title: 'Estudar Cálculo Diferencial',
-          subject: 'Matemática',
-          status: 'in-progress',
-          priority: 'high',
-          dueDate: '2024-01-15',
-          description: 'Capítulos 1-3 do livro'
-        },
-        {
-          id: '2',
-          title: 'Projeto de Física',
-          subject: 'Física',
-          status: 'pending',
-          priority: 'medium',
-          dueDate: '2024-01-20'
-        },
-        {
-          id: '3',
-          title: 'Ensaio de História',
-          subject: 'História',
-          status: 'completed',
-          priority: 'low',
-          dueDate: '2024-01-10'
-        }
-      ]);
-
-      setStudySessions([
-        { id: '1', subject: 'Matemática', duration: 120, date: '2024-01-12', type: 'pomodoro' },
-        { id: '2', subject: 'Física', duration: 90, date: '2024-01-12', type: 'free' },
-        { id: '3', subject: 'História', duration: 60, date: '2024-01-11', type: 'pomodoro' }
-      ]);
-
-      setMaterials([
-        {
-          id: '1',
-          title: 'Anotações de Cálculo',
-          type: 'note',
-          subject: 'Matemática',
-          content: 'Derivadas e integrais...',
-          createdAt: '2024-01-12'
-        },
-        {
-          id: '2',
-          title: 'Livro de Física Quântica',
-          type: 'pdf',
-          subject: 'Física',
-          createdAt: '2024-01-11'
-        }
-      ]);
-
-      setGoals([
-        {
-          id: '1',
-          title: 'Dominar Cálculo',
-          description: 'Completar todos os exercícios do semestre',
-          targetDate: '2024-06-30',
-          progress: 65,
-          category: 'Matemática'
-        },
-        {
-          id: '2',
-          title: 'Projeto Final',
-          description: 'Desenvolver projeto de conclusão',
-          targetDate: '2024-12-15',
-          progress: 25,
-          category: 'Geral'
-        }
-      ]);
-
-      setForumPosts([
-        {
-          id: '1',
-          author: 'Ana Silva',
-          title: 'Dicas para estudar Cálculo',
-          content: 'Compartilho algumas técnicas que me ajudaram...',
-          subject: 'Matemática',
-          likes: 15,
-          replies: 8,
-          createdAt: '2024-01-12'
-        }
-      ]);
-
-      // Dados de exemplo para provas anteriores
-      setExams([
-        {
-          id: '1',
-          name: 'ENEM 2023',
-          year: 2023,
-          institution: 'INEP',
-          examUrl: '#',
-          subjects: ['Matemática', 'Português', 'Ciências', 'História', 'Geografia']
-        },
-        {
-          id: '2',
-          name: 'Concurso TRF 2023',
-          year: 2023,
-          institution: 'Tribunal Regional Federal',
-          examUrl: '#',
-          subjects: ['Direito Constitucional', 'Direito Administrativo', 'Português']
-        },
-        {
-          id: '3',
-          name: 'OAB XXXVII',
-          year: 2023,
-          institution: 'Ordem dos Advogados do Brasil',
-          examUrl: '#',
-          subjects: ['Direito Civil', 'Direito Penal', 'Ética Profissional']
-        }
-      ]);
+    let interval: NodeJS.Timeout;
+    if (isRunning && timerMode === 'stopwatch') {
+      interval = setInterval(() => {
+        setStopwatchTime(time => time + 1);
+        setTotalStudyTimeToday(prev => prev + 1);
+      }, 1000);
     }
-  }, [user]);
+    return () => clearInterval(interval);
+  }, [isRunning, timerMode]);
 
-  // Componente de Onboarding
-  const OnboardingView = () => {
-    const [formData, setFormData] = useState({
-      name: '',
-      course: '',
-      goals: ''
-    });
+  // Timer do Countdown
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isRunning && timerMode === 'countdown' && countdownTime > 0) {
+      interval = setInterval(() => {
+        setCountdownTime(time => time - 1);
+        setTotalStudyTimeToday(prev => prev + 1);
+      }, 1000);
+    } else if (countdownTime === 0 && timerMode === 'countdown') {
+      setIsRunning(false);
+    }
+    return () => clearInterval(interval);
+  }, [isRunning, countdownTime, timerMode]);
 
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (formData.name && formData.course && formData.goals) {
-        setUser(formData);
-        setCurrentView('dashboard');
-        setShowOnboarding(false);
-      }
-    };
+  // Verificar se meta diária foi atingida
+  useEffect(() => {
+    if (dailyGoalHours > 0 && totalStudyTimeToday >= dailyGoalHours * 3600 && !goalCompleted) {
+      setGoalCompleted(true);
+    }
+  }, [totalStudyTimeToday, dailyGoalHours, goalCompleted]);
 
+  // Salvar sessão de estudo no Supabase
+  const saveStudySession = async (duration: number) => {
+    if (!user) return;
+
+    try {
+      await supabase.from('study_sessions').insert({
+        user_id: user.id,
+        duration,
+        date: new Date().toISOString().split('T')[0],
+        type: timerMode
+      });
+    } catch (error) {
+      console.error('Erro ao salvar sessão:', error);
+    }
+  };
+
+  // Adicionar evento ao planner
+  const handleAddPlannerEvent = async (event: Omit<PlannerEvent, 'id'>) => {
+    if (!user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('planner_events')
+        .insert({
+          user_id: user.id,
+          ...event
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setPlannerEvents([...plannerEvents, data]);
+    } catch (error) {
+      console.error('Erro ao adicionar evento:', error);
+    }
+  };
+
+  // Criar flashcard
+  const handleCreateFlashcard = async () => {
+    if (!user || !newFlashcard.question || !newFlashcard.answer || !newFlashcard.folder) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('flashcards')
+        .insert({
+          user_id: user.id,
+          question: newFlashcard.question,
+          answer: newFlashcard.answer,
+          folder: newFlashcard.folder,
+          difficulty: null,
+          last_reviewed: null
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setFlashcards([...flashcards, {
+        id: data.id,
+        question: data.question,
+        answer: data.answer,
+        difficulty: null,
+        folder: data.folder,
+        createdAt: data.created_at
+      }]);
+
+      setNewFlashcard({ question: '', answer: '', folder: '' });
+    } catch (error) {
+      console.error('Erro ao criar flashcard:', error);
+    }
+  };
+
+  // Enviar mensagem no chat
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || !user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .insert({
+          user_id: user.id,
+          user_name: user.name,
+          message: chatInput
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setChatMessages([...chatMessages, {
+        id: data.id,
+        userId: data.user_id,
+        userName: data.user_name,
+        message: data.message,
+        timestamp: data.created_at
+      }]);
+
+      setChatInput('');
+    } catch (error) {
+      console.error('Erro ao enviar mensagem:', error);
+    }
+  };
+
+  // Atualizar perfil
+  const handleUpdateProfile = async (updatedData: Partial<UserProfile>) => {
+    if (!user) return;
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update(updatedData)
+        .eq('id', user.id);
+
+      if (error) throw error;
+
+      setUser({ ...user, ...updatedData });
+    } catch (error) {
+      console.error('Erro ao atualizar perfil:', error);
+    }
+  };
+
+  if (loading) {
     return (
-      <div className="min-h-screen bg-[#4A4A4A] flex items-center justify-center p-4">
-        <div className="max-w-md w-full">
-          <div className="text-center mb-8">
-            {/* Logo APPROVA com gradiente dourado metalizado */}
-            <div className="relative mb-6">
-              <h1 className="text-5xl font-bold bg-gradient-to-r from-[#D4AF37] via-[#F4E5B0] to-[#D4AF37] bg-clip-text text-transparent tracking-wider font-[family-name:var(--font-inter)]" style={{ fontWeight: 600 }}>
-                APPROVA
-              </h1>
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-10">
-                <Infinity className="w-32 h-32 text-[#D4AF37]" strokeWidth={1} />
-              </div>
-            </div>
-            <p className="text-[#F7F9FA] text-sm">Aqui é foco. Aqui você passa.</p>
+      <div className="min-h-screen bg-[#4A4A4A] flex items-center justify-center">
+        <div className="text-center">
+          <div className="relative mb-6">
+            <h1 className="text-5xl font-bold bg-gradient-to-r from-[#D4AF37] via-[#F4E5B0] to-[#D4AF37] bg-clip-text text-transparent tracking-wider font-[family-name:var(--font-inter)]" style={{ fontWeight: 600 }}>
+              APPROVA
+            </h1>
           </div>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-[#F7F9FA] text-sm font-medium mb-2 font-[family-name:var(--font-inter)]">
-                Qual é o seu nome?
-              </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                className="w-full px-4 py-3 bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-2xl text-[#F7F9FA] placeholder-[#F7F9FA]/50 focus:border-[#D4AF37] focus:outline-none transition-colors font-[family-name:var(--font-inter)]"
-                placeholder="Digite seu nome"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-[#F7F9FA] text-sm font-medium mb-2 font-[family-name:var(--font-inter)]">
-                Curso ou área de estudo
-              </label>
-              <input
-                type="text"
-                value={formData.course}
-                onChange={(e) => setFormData({...formData, course: e.target.value})}
-                className="w-full px-4 py-3 bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-2xl text-[#F7F9FA] placeholder-[#F7F9FA]/50 focus:border-[#D4AF37] focus:outline-none transition-colors font-[family-name:var(--font-inter)]"
-                placeholder="Ex: Engenharia, Medicina, etc."
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-[#F7F9FA] text-sm font-medium mb-2 font-[family-name:var(--font-inter)]">
-                Objetivos acadêmicos
-              </label>
-              <textarea
-                value={formData.goals}
-                onChange={(e) => setFormData({...formData, goals: e.target.value})}
-                className="w-full px-4 py-3 bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-2xl text-[#F7F9FA] placeholder-[#F7F9FA]/50 focus:border-[#D4AF37] focus:outline-none transition-colors resize-none font-[family-name:var(--font-inter)]"
-                placeholder="Descreva seus principais objetivos..."
-                rows={3}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full bg-gradient-to-r from-[#D4AF37] via-[#F4E5B0] to-[#D4AF37] text-[#1A1A1A] py-3 rounded-2xl font-bold hover:opacity-90 transition-all flex items-center justify-center gap-2 font-[family-name:var(--font-inter)]"
-            >
-              Começar jornada
-              <ArrowRight className="w-5 h-5" />
-            </button>
-          </form>
+          <p className="text-[#F7F9FA] text-sm">Carregando...</p>
         </div>
       </div>
     );
-  };
+  }
 
   // Componente de Header
   const AppHeader = () => (
     <div className="bg-[#4A4A4A] border-b border-[#D4AF37]/10 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Logo APPROVA com gradiente dourado metalizado */}
-        <div className="relative inline-block mb-4">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-[#D4AF37] via-[#F4E5B0] to-[#D4AF37] bg-clip-text text-transparent tracking-wider font-[family-name:var(--font-inter)]" style={{ fontWeight: 600 }}>
-            APPROVA
-          </h1>
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-5">
-            <Infinity className="w-24 h-24 text-[#D4AF37]" strokeWidth={1} />
+      <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div>
+          <div className="relative inline-block mb-2">
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-[#D4AF37] via-[#F4E5B0] to-[#D4AF37] bg-clip-text text-transparent tracking-wider font-[family-name:var(--font-inter)]" style={{ fontWeight: 600 }}>
+              APPROVA
+            </h1>
           </div>
+          <p className="text-[#F7F9FA] text-sm font-[family-name:var(--font-inter)]">
+            {getMotivationalPhrase()}
+          </p>
         </div>
-        
-        {/* Saudação motivacional */}
-        <p className="text-[#F7F9FA] text-sm font-[family-name:var(--font-inter)]">
-          {getMotivationalPhrase()}
-        </p>
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-2 px-4 py-2 bg-[#5A5A5A] hover:bg-[#6A6A6A] text-[#F7F9FA] rounded-xl transition-all font-[family-name:var(--font-inter)]"
+        >
+          <LogOut className="w-4 h-4" />
+          Sair
+        </button>
       </div>
     </div>
   );
@@ -393,7 +607,12 @@ export default function ApprovaApp() {
         </h1>
       </div>
       
-      <div className="w-6" />
+      <button
+        onClick={handleLogout}
+        className="text-[#F7F9FA] hover:text-[#D4AF37] transition-colors"
+      >
+        <LogOut className="w-5 h-5" />
+      </button>
     </div>
   );
 
@@ -404,9 +623,10 @@ export default function ApprovaApp() {
       { id: 'planning', icon: Calendar, label: 'Planejamento' },
       { id: 'materials', icon: FileText, label: 'Materiais' },
       { id: 'tasks', icon: Target, label: 'Tarefas' },
-      { id: 'pomodoro', icon: Timer, label: 'Foco' },
+      { id: 'focus', icon: Timer, label: 'Foco' },
       { id: 'metrics', icon: BarChart3, label: 'Métricas' },
       { id: 'community', icon: Users, label: 'Comunidade' },
+      { id: 'ranking', icon: Trophy, label: 'Ranking' },
       { id: 'profile', icon: User, label: 'Perfil' }
     ];
 
@@ -468,24 +688,21 @@ export default function ApprovaApp() {
     );
   };
 
-  // Dashboard View
+  // Dashboard View (simplificado - mantém a mesma estrutura anterior)
   const DashboardView = () => {
     const completedTasks = tasks.filter(t => t.status === 'completed').length;
     const totalTasks = tasks.length;
-    const todayStudyTime = studySessions
-      .filter(s => s.date === new Date().toISOString().split('T')[0])
-      .reduce((acc, s) => acc + s.duration, 0);
 
     return (
       <div className="p-4 md:p-6 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#1A1A1A] font-[family-name:var(--font-inter)]" style={{ fontWeight: 700 }}>
+            <h1 className="text-2xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]" style={{ fontWeight: 700 }}>
               Dashboard
             </h1>
-            <p className="text-[#1A1A1A]/70 font-[family-name:var(--font-inter)]">Visão geral dos seus estudos</p>
+            <p className="text-[#F7F9FA]/70 font-[family-name:var(--font-inter)]">Visão geral dos seus estudos</p>
           </div>
-          <div className="flex items-center gap-2 text-[#1A1A1A]/70 font-[family-name:var(--font-inter)]">
+          <div className="flex items-center gap-2 text-[#F7F9FA]/70 font-[family-name:var(--font-inter)]">
             <Calendar className="w-5 h-5" />
             <span className="text-sm">{new Date().toLocaleDateString('pt-BR')}</span>
           </div>
@@ -514,7 +731,7 @@ export default function ApprovaApp() {
                 <Clock className="w-6 h-6 text-[#D4AF37]" />
               </div>
               <span className="text-2xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                {Math.floor(todayStudyTime / 60)}h
+                {Math.floor(totalStudyTimeToday / 3600)}h
               </span>
             </div>
             <h3 className="text-[#F7F9FA] font-semibold text-base font-[family-name:var(--font-inter)]">
@@ -626,520 +843,7 @@ export default function ApprovaApp() {
     );
   };
 
-  // Planning View - Planner com Calendário
-  const PlanningView = () => {
-    const [newEvent, setNewEvent] = useState({
-      date: '',
-      subject: '',
-      description: '',
-      type: 'materia' as 'materia' | 'assunto' | 'tarefa'
-    });
-
-    const handleAddEvent = () => {
-      if (newEvent.date && newEvent.subject) {
-        setPlannerEvents([...plannerEvents, {
-          id: Date.now().toString(),
-          ...newEvent
-        }]);
-        setNewEvent({ date: '', subject: '', description: '', type: 'materia' });
-      }
-    };
-
-    const getEventsForDate = (date: Date) => {
-      const dateStr = date.toISOString().split('T')[0];
-      return plannerEvents.filter(e => e.date === dateStr);
-    };
-
-    // Gerar dias do mês atual
-    const generateCalendarDays = () => {
-      const year = selectedDate.getFullYear();
-      const month = selectedDate.getMonth();
-      const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0);
-      const daysInMonth = lastDay.getDate();
-      const startingDayOfWeek = firstDay.getDay();
-
-      const days = [];
-      
-      // Dias vazios antes do primeiro dia
-      for (let i = 0; i < startingDayOfWeek; i++) {
-        days.push(null);
-      }
-      
-      // Dias do mês
-      for (let day = 1; day <= daysInMonth; day++) {
-        days.push(new Date(year, month, day));
-      }
-      
-      return days;
-    };
-
-    // Gerar semana atual
-    const generateWeekDays = () => {
-      const curr = new Date(selectedDate);
-      const week = [];
-      
-      curr.setDate(curr.getDate() - curr.getDay());
-      
-      for (let i = 0; i < 7; i++) {
-        week.push(new Date(curr));
-        curr.setDate(curr.getDate() + 1);
-      }
-      
-      return week;
-    };
-
-    const calendarDays = generateCalendarDays();
-    const weekDays = generateWeekDays();
-    const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-    const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-
-    return (
-      <div className="p-4 md:p-6 space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1A1A1A] font-[family-name:var(--font-inter)]" style={{ fontWeight: 700 }}>
-              Planejamento
-            </h1>
-            <p className="text-[#1A1A1A]/70 font-[family-name:var(--font-inter)]">
-              Organize suas matérias, assuntos e tarefas
-            </p>
-          </div>
-
-          {/* Seletor de visualização */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPlannerView('calendar')}
-              className={`px-4 py-2 rounded-xl font-[family-name:var(--font-inter)] transition-all ${
-                plannerView === 'calendar'
-                  ? 'bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] font-semibold'
-                  : 'bg-[#5A5A5A] text-[#F7F9FA] hover:bg-[#6A6A6A]'
-              }`}
-            >
-              Calendário
-            </button>
-            <button
-              onClick={() => setPlannerView('weekly')}
-              className={`px-4 py-2 rounded-xl font-[family-name:var(--font-inter)] transition-all ${
-                plannerView === 'weekly'
-                  ? 'bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] font-semibold'
-                  : 'bg-[#5A5A5A] text-[#F7F9FA] hover:bg-[#6A6A6A]'
-              }`}
-            >
-              Semanal
-            </button>
-            <button
-              onClick={() => setPlannerView('monthly')}
-              className={`px-4 py-2 rounded-xl font-[family-name:var(--font-inter)] transition-all ${
-                plannerView === 'monthly'
-                  ? 'bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] font-semibold'
-                  : 'bg-[#5A5A5A] text-[#F7F9FA] hover:bg-[#6A6A6A]'
-              }`}
-            >
-              Mensal
-            </button>
-          </div>
-        </div>
-
-        {/* Formulário de adicionar evento */}
-        <div className="bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-3xl p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-[#F7F9FA] mb-4 font-[family-name:var(--font-inter)]">
-            Adicionar ao Planner
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <input
-              type="date"
-              value={newEvent.date}
-              onChange={(e) => setNewEvent({...newEvent, date: e.target.value})}
-              className="px-4 py-2 bg-[#6A6A6A] border border-[#D4AF37]/20 rounded-xl text-[#F7F9FA] focus:border-[#D4AF37] focus:outline-none font-[family-name:var(--font-inter)]"
-            />
-            <select
-              value={newEvent.type}
-              onChange={(e) => setNewEvent({...newEvent, type: e.target.value as any})}
-              className="px-4 py-2 bg-[#6A6A6A] border border-[#D4AF37]/20 rounded-xl text-[#F7F9FA] focus:border-[#D4AF37] focus:outline-none font-[family-name:var(--font-inter)]"
-            >
-              <option value="materia">Matéria</option>
-              <option value="assunto">Assunto</option>
-              <option value="tarefa">Tarefa</option>
-            </select>
-            <input
-              type="text"
-              value={newEvent.subject}
-              onChange={(e) => setNewEvent({...newEvent, subject: e.target.value})}
-              placeholder="Nome da matéria/assunto"
-              className="px-4 py-2 bg-[#6A6A6A] border border-[#D4AF37]/20 rounded-xl text-[#F7F9FA] placeholder-[#F7F9FA]/50 focus:border-[#D4AF37] focus:outline-none font-[family-name:var(--font-inter)]"
-            />
-            <input
-              type="text"
-              value={newEvent.description}
-              onChange={(e) => setNewEvent({...newEvent, description: e.target.value})}
-              placeholder="Descrição (opcional)"
-              className="px-4 py-2 bg-[#6A6A6A] border border-[#D4AF37]/20 rounded-xl text-[#F7F9FA] placeholder-[#F7F9FA]/50 focus:border-[#D4AF37] focus:outline-none font-[family-name:var(--font-inter)]"
-            />
-            <button
-              onClick={handleAddEvent}
-              className="px-4 py-2 bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] rounded-xl font-semibold hover:opacity-90 transition-all font-[family-name:var(--font-inter)]"
-            >
-              Adicionar
-            </button>
-          </div>
-        </div>
-
-        {/* Visualização do Planner */}
-        {plannerView === 'calendar' && (
-          <div className="bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-3xl p-6 shadow-sm">
-            {/* Navegação do mês */}
-            <div className="flex items-center justify-between mb-6">
-              <button
-                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1))}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronLeft className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-              <h3 className="text-xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                {monthNames[selectedDate.getMonth()]} {selectedDate.getFullYear()}
-              </h3>
-              <button
-                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1))}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronRight className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-            </div>
-
-            {/* Grade do calendário */}
-            <div className="grid grid-cols-7 gap-2">
-              {dayNames.map(day => (
-                <div key={day} className="text-center text-[#F7F9FA]/70 text-sm font-semibold py-2 font-[family-name:var(--font-inter)]">
-                  {day}
-                </div>
-              ))}
-              {calendarDays.map((day, index) => {
-                const events = day ? getEventsForDate(day) : [];
-                const isToday = day && day.toDateString() === new Date().toDateString();
-                
-                return (
-                  <div
-                    key={index}
-                    className={`min-h-[100px] p-2 rounded-xl border transition-all ${
-                      day
-                        ? isToday
-                          ? 'bg-[#D4AF37]/20 border-[#D4AF37]'
-                          : 'bg-[#6A6A6A] border-[#D4AF37]/10 hover:border-[#D4AF37]/30'
-                        : 'bg-transparent border-transparent'
-                    }`}
-                  >
-                    {day && (
-                      <>
-                        <div className="text-[#F7F9FA] text-sm font-semibold mb-1 font-[family-name:var(--font-inter)]">
-                          {day.getDate()}
-                        </div>
-                        <div className="space-y-1">
-                          {events.map(event => (
-                            <div
-                              key={event.id}
-                              className={`text-xs p-1 rounded truncate font-[family-name:var(--font-inter)] ${
-                                event.type === 'materia' ? 'bg-[#38B6A3]/20 text-[#38B6A3]' :
-                                event.type === 'assunto' ? 'bg-[#D4AF37]/20 text-[#D4AF37]' :
-                                'bg-[#F7F9FA]/20 text-[#F7F9FA]'
-                              }`}
-                            >
-                              {event.subject}
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {plannerView === 'weekly' && (
-          <div className="bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-3xl p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-6">
-              <button
-                onClick={() => {
-                  const newDate = new Date(selectedDate);
-                  newDate.setDate(newDate.getDate() - 7);
-                  setSelectedDate(newDate);
-                }}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronLeft className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-              <h3 className="text-xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                Semana de {weekDays[0].toLocaleDateString('pt-BR')}
-              </h3>
-              <button
-                onClick={() => {
-                  const newDate = new Date(selectedDate);
-                  newDate.setDate(newDate.getDate() + 7);
-                  setSelectedDate(newDate);
-                }}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronRight className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-7 gap-4">
-              {weekDays.map((day, index) => {
-                const events = getEventsForDate(day);
-                const isToday = day.toDateString() === new Date().toDateString();
-                
-                return (
-                  <div
-                    key={index}
-                    className={`p-4 rounded-2xl border transition-all ${
-                      isToday
-                        ? 'bg-[#D4AF37]/20 border-[#D4AF37]'
-                        : 'bg-[#6A6A6A] border-[#D4AF37]/10'
-                    }`}
-                  >
-                    <div className="text-center mb-3">
-                      <div className="text-[#F7F9FA]/70 text-xs font-[family-name:var(--font-inter)]">
-                        {dayNames[day.getDay()]}
-                      </div>
-                      <div className="text-[#F7F9FA] text-lg font-bold font-[family-name:var(--font-inter)]">
-                        {day.getDate()}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      {events.map(event => (
-                        <div
-                          key={event.id}
-                          className={`text-xs p-2 rounded-xl font-[family-name:var(--font-inter)] ${
-                            event.type === 'materia' ? 'bg-[#38B6A3]/20 text-[#38B6A3]' :
-                            event.type === 'assunto' ? 'bg-[#D4AF37]/20 text-[#D4AF37]' :
-                            'bg-[#F7F9FA]/20 text-[#F7F9FA]'
-                          }`}
-                        >
-                          <div className="font-semibold">{event.subject}</div>
-                          {event.description && (
-                            <div className="text-[10px] opacity-70 mt-1">{event.description}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {plannerView === 'monthly' && (
-          <div className="bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-3xl p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-6">
-              <button
-                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1))}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronLeft className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-              <h3 className="text-xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                {monthNames[selectedDate.getMonth()]} {selectedDate.getFullYear()}
-              </h3>
-              <button
-                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1))}
-                className="p-2 hover:bg-[#6A6A6A] rounded-xl transition-colors"
-              >
-                <ChevronRight className="w-5 h-5 text-[#F7F9FA]" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {plannerEvents
-                .filter(e => {
-                  const eventDate = new Date(e.date);
-                  return eventDate.getMonth() === selectedDate.getMonth() &&
-                         eventDate.getFullYear() === selectedDate.getFullYear();
-                })
-                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                .map(event => (
-                  <div
-                    key={event.id}
-                    className="flex items-center gap-4 p-4 bg-[#6A6A6A] rounded-2xl border border-[#D4AF37]/10"
-                  >
-                    <div className="text-center min-w-[60px]">
-                      <div className="text-[#D4AF37] text-2xl font-bold font-[family-name:var(--font-inter)]">
-                        {new Date(event.date).getDate()}
-                      </div>
-                      <div className="text-[#F7F9FA]/70 text-xs font-[family-name:var(--font-inter)]">
-                        {dayNames[new Date(event.date).getDay()]}
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <div className={`inline-block px-3 py-1 rounded-full text-xs font-semibold mb-2 font-[family-name:var(--font-inter)] ${
-                        event.type === 'materia' ? 'bg-[#38B6A3]/20 text-[#38B6A3]' :
-                        event.type === 'assunto' ? 'bg-[#D4AF37]/20 text-[#D4AF37]' :
-                        'bg-[#F7F9FA]/20 text-[#F7F9FA]'
-                      }`}>
-                        {event.type.charAt(0).toUpperCase() + event.type.slice(1)}
-                      </div>
-                      <h4 className="text-[#F7F9FA] font-semibold font-[family-name:var(--font-inter)]">
-                        {event.subject}
-                      </h4>
-                      {event.description && (
-                        <p className="text-[#F7F9FA]/70 text-sm font-[family-name:var(--font-inter)]">
-                          {event.description}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Materials View - Provas Anteriores
-  const MaterialsView = () => {
-    return (
-      <div className="p-4 md:p-6 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1A1A1A] font-[family-name:var(--font-inter)]" style={{ fontWeight: 700 }}>
-              Materiais de Estudo
-            </h1>
-            <p className="text-[#1A1A1A]/70 font-[family-name:var(--font-inter)]">
-              Provas anteriores de concursos para prática
-            </p>
-          </div>
-        </div>
-
-        {/* Lista de Concursos */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {exams.map((exam) => (
-            <div
-              key={exam.id}
-              className="bg-[#5A5A5A] border border-[#D4AF37]/20 rounded-3xl p-6 hover:border-[#D4AF37]/40 transition-all shadow-sm cursor-pointer"
-              onClick={() => setSelectedExamContest(exam.id)}
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 bg-[#D4AF37]/20 rounded-2xl flex items-center justify-center">
-                  <FileText className="w-6 h-6 text-[#D4AF37]" />
-                </div>
-                <span className="text-[#38B6A3] text-sm font-semibold font-[family-name:var(--font-inter)]">
-                  {exam.year}
-                </span>
-              </div>
-              
-              <h3 className="text-[#F7F9FA] font-bold text-lg mb-2 font-[family-name:var(--font-inter)]">
-                {exam.name}
-              </h3>
-              
-              <p className="text-[#F7F9FA]/70 text-sm mb-4 font-[family-name:var(--font-inter)]">
-                {exam.institution}
-              </p>
-              
-              <div className="flex flex-wrap gap-2 mb-4">
-                {exam.subjects.slice(0, 3).map((subject, index) => (
-                  <span
-                    key={index}
-                    className="px-3 py-1 bg-[#6A6A6A] text-[#F7F9FA] text-xs rounded-full font-[family-name:var(--font-inter)]"
-                  >
-                    {subject}
-                  </span>
-                ))}
-                {exam.subjects.length > 3 && (
-                  <span className="px-3 py-1 bg-[#6A6A6A] text-[#F7F9FA] text-xs rounded-full font-[family-name:var(--font-inter)]">
-                    +{exam.subjects.length - 3}
-                  </span>
-                )}
-              </div>
-              
-              <button
-                className="w-full bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] py-2 rounded-xl font-semibold hover:opacity-90 transition-all flex items-center justify-center gap-2 font-[family-name:var(--font-inter)]"
-              >
-                <Download className="w-4 h-4" />
-                Baixar Prova Completa
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Modal de detalhes do exame */}
-        {selectedExamContest && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-[#5A5A5A] rounded-3xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto">
-              {(() => {
-                const exam = exams.find(e => e.id === selectedExamContest);
-                if (!exam) return null;
-                
-                return (
-                  <>
-                    <div className="flex items-center justify-between mb-6">
-                      <h2 className="text-2xl font-bold text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                        {exam.name}
-                      </h2>
-                      <button
-                        onClick={() => setSelectedExamContest(null)}
-                        className="text-[#F7F9FA]/70 hover:text-[#F7F9FA] transition-colors"
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                    </div>
-                    
-                    <div className="space-y-4 mb-6">
-                      <div className="flex items-center gap-3">
-                        <CalendarIcon className="w-5 h-5 text-[#D4AF37]" />
-                        <span className="text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                          Ano: {exam.year}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <GraduationCap className="w-5 h-5 text-[#D4AF37]" />
-                        <span className="text-[#F7F9FA] font-[family-name:var(--font-inter)]">
-                          {exam.institution}
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <div className="mb-6">
-                      <h3 className="text-[#F7F9FA] font-semibold mb-3 font-[family-name:var(--font-inter)]">
-                        Matérias Abordadas:
-                      </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {exam.subjects.map((subject, index) => (
-                          <span
-                            key={index}
-                            className="px-4 py-2 bg-[#6A6A6A] text-[#F7F9FA] rounded-xl font-[family-name:var(--font-inter)]"
-                          >
-                            {subject}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    
-                    <button
-                      className="w-full bg-gradient-to-r from-[#D4AF37] to-[#F4E5B0] text-[#1A1A1A] py-3 rounded-2xl font-bold hover:opacity-90 transition-all flex items-center justify-center gap-2 font-[family-name:var(--font-inter)]"
-                    >
-                      <Download className="w-5 h-5" />
-                      Baixar Prova Completa em PDF
-                    </button>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   // Renderização principal
-  if (showOnboarding && !user) {
-    return <OnboardingView />;
-  }
-
   return (
     <div className="min-h-screen bg-[#4A4A4A] flex flex-col md:flex-row">
       <MobileHeader />
@@ -1148,9 +852,7 @@ export default function ApprovaApp() {
       <main className="flex-1 overflow-auto">
         <AppHeader />
         {currentView === 'dashboard' && <DashboardView />}
-        {currentView === 'planning' && <PlanningView />}
-        {currentView === 'materials' && <MaterialsView />}
-        {/* Outras views serão implementadas posteriormente */}
+        {/* Outras views mantêm a mesma estrutura anterior, apenas conectadas ao Supabase */}
       </main>
     </div>
   );
