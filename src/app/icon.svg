@@ -1,0 +1,17 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="128" fill="#0A4158"/>
+  
+  <!-- Infinity Symbol (quase transparente) -->
+  <path d="M256 256C256 256 200 200 150 200C100 200 70 230 70 280C70 330 100 360 150 360C200 360 256 304 256 304C256 304 312 360 362 360C412 360 442 330 442 280C442 230 412 200 362 200C312 200 256 256 256 256Z" 
+        fill="#D5C49F" 
+        fill-opacity="0.15"
+        stroke="#D5C49F" 
+        stroke-width="4" 
+        stroke-opacity="0.3"/>
+  
+  <!-- Letter A (stylized) -->
+  <path d="M256 140L340 380H300L280 330H232L212 380H172L256 140Z" 
+        fill="#D5C49F"/>
+  <rect x="240" y="280" width="32" height="8" fill="#0A4158"/>
+</svg>
